@@ -1,20 +1,29 @@
 {
-  "name": "qarmo",
+  "name": "qarmo-monorepo",
   "version": "1.0.0",
-  "main": "index.js",
-  "dependencies": {
-    "expo": "~57.0.4",
-    "expo-status-bar": "~57.0.0",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "react-native": "0.86.0",
-    "react-native-web": "^0.21.2"
-  },
+  "private": true,
+  "packageManager": "pnpm@11.13.0",
   "scripts": {
-    "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "preinstall": "npx only-allow pnpm",
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "typecheck": "turbo typecheck"
   },
-  "private": true
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/react": "^19.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.16.0",
+    "@typescript-eslint/parser": "^7.16.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.29.1",
+    "eslint-plugin-react": "^7.34.3",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "eslint-plugin-react-native": "^4.1.0",
+    "prettier": "^3.3.2",
+    "turbo": "^2.0.4",
+    "typescript": "~5.3.3"
+  }
 }

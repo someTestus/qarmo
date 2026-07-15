@@ -1,0 +1,20 @@
+{
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "loading": "Loading...",
+    "error": "Something went wrong"
+  },
+  "auth": {
+    "login": "Log In",
+    "signup": "Sign Up",
+    "phone": "Phone Number",
+    "otp": "Verification Code"
+  },
+  "partner": {
+    "dashboard": "Dashboard",
+    "rides": "Rides",
+    "earnings": "Earnings",
+    "referrals": "Referrals"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "@qarmo/partner",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "@qarmo/core": "workspace:*",
+    "@qarmo/i18n": "workspace:*",
+    "@qarmo/supabase": "workspace:*",
+    "@qarmo/ui": "workspace:*",
+    "expo": "~57.0.4",
+    "expo-status-bar": "~57.0.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "dev": "expo start",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"**/*.{ts,tsx,js,jsx}\" --ignore-pattern node_modules"
+  },
+  "private": true
+}
