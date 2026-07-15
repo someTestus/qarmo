@@ -1,0 +1,30 @@
+# supabase/config.toml
+# Supabase CLI settings for local development and project setup
+
+project_id = "qarmo-partner-app"
+
+[api]
+port = 54321
+schemas = ["public", "storage"]
+extra_search_path = ["public", "extensions"]
+
+[db]
+port = 54322
+shadow_port = 54320
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+jwt_expiry = 3600
+enable_signup = true
+
+[auth.sms]
+enable_signup = true
+double_confirm_changes = false
+
+[storage]
+enabled = true
+file_size_limit = "50MB"
+
+[functions.complete-profile]
+verify_jwt = true
