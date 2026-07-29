@@ -12,13 +12,33 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { theme, Text, Button, Card, getInitials } from '@qarmo/ui';
+import * as Clipboard from 'expo-clipboard';
+import {
+  theme,
+  Text,
+  Button,
+  Card,
+  getInitials,
+  IconCamera,
+  IconPencilSimple,
+  IconPhone,
+  IconUser,
+  IconTaxi,
+  IconScooter,
+  IconMapPin,
+  IconCar,
+  IconGift,
+  IconSignOut,
+  IconIdentificationCard,
+  IconCheck,
+  IconCaretRight,
+} from '@qarmo/ui';
 import { useTranslation } from '@qarmo/i18n';
 import { supabase } from '@qarmo/supabase';
 import { useAuth } from '../hooks/useAuth';
 import { APP_VERSION } from '@qarmo/core';
 import * as ImagePicker from 'expo-image-picker';
-import { compressImage } from '../utils/image';
+import { compressImage, uriToUploadBody } from '../utils/image';
 
 interface DocStatus {
   doc_type: string;
@@ -96,7 +116,10 @@ export const ProfileScreen: React.FC = () => {
   };
 
   const handleShareReferral = async () => {
-    if (!profile?.referral_code) return;
+    if (!profile?.referral_code) {
+      Alert.alert(t('dashboard.codeNotReady', { defaultValue: 'Your referral code is still being generated. Please try again in a moment.' }));
+      return;
+    }
     try {
       await Share.share({
         message: t('dashboard.shareMessage', {
@@ -105,7 +128,9 @@ export const ProfileScreen: React.FC = () => {
         }),
       });
     } catch (err) {
-      console.error('Error sharing code:', err);
+      console.error('Error sharing code, falling back to clipboard:', err);
+      await Clipboard.setStringAsync(profile.referral_code);
+      Alert.alert(t('dashboard.codeCopied', { defaultValue: 'Code copied' }));
     }
   };
 
@@ -141,7 +166,7 @@ export const ProfileScreen: React.FC = () => {
 
     try {
       const options: ImagePicker.ImagePickerOptions = {
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
@@ -154,13 +179,12 @@ export const ProfileScreen: React.FC = () => {
       if (!result.canceled && result.assets?.length > 0) {
         setUpdatingAvatar(true);
         const compressedUri = await compressImage(result.assets[0].uri, 800, 0.7);
-        const response = await fetch(compressedUri);
-        const blob = await response.blob();
+        const body = await uriToUploadBody(compressedUri);
         const fileName = `${profile.id}/profile.jpg`;
 
         const { error: uploadErr } = await supabase.storage
           .from('avatars')
-          .upload(fileName, blob, { contentType: 'image/jpeg', upsert: true });
+          .upload(fileName, body, { contentType: 'image/jpeg', upsert: true });
 
         if (uploadErr) throw new Error('Failed to upload photo: ' + uploadErr.message);
 
@@ -250,10 +274,13 @@ export const ProfileScreen: React.FC = () => {
 
   const partnerTypeLabel =
     profile.partner_type === 'ride'
-      ? t('partner.ridePartner', { defaultValue: '🛺 Ride Partner' })
+      ? t('partner.ridePartner', { defaultValue: 'Ride Partner' })
       : profile.partner_type === 'delivery'
-      ? t('partner.deliveryPartner', { defaultValue: '🛵 Delivery Partner' })
+      ? t('partner.deliveryPartner', { defaultValue: 'Delivery Partner' })
       : t('profile.partner', { defaultValue: 'Partner' });
+
+  const PartnerTypeIcon =
+    profile.partner_type === 'ride' ? IconTaxi : profile.partner_type === 'delivery' ? IconScooter : IconUser;
 
   const memberDate = profile.created_at
     ? new Date(profile.created_at).toLocaleDateString(undefined, {
@@ -297,7 +324,7 @@ export const ProfileScreen: React.FC = () => {
               )}
             </View>
             <View style={styles.cameraBadge}>
-              <Text style={styles.cameraIcon}>📷</Text>
+              <IconCamera size={14} color={theme.colors.textOnColored} />
             </View>
           </TouchableOpacity>
 
@@ -306,23 +333,32 @@ export const ProfileScreen: React.FC = () => {
               <Text variant="title" style={styles.nameText}>
                 {profile.full_name || 'User'}
               </Text>
-              <Text style={styles.editNameIcon}>✏️</Text>
+              <IconPencilSimple size={14} color={theme.colors.mutedText} />
             </TouchableOpacity>
 
-            <Text variant="body" color={theme.colors.mutedText} style={styles.phoneText}>
-              📱 {profile.phone}
-            </Text>
-
-            <TouchableOpacity onPress={showAvatarPickerOptions} activeOpacity={0.7}>
-              <Text variant="caption" color={theme.colors.primaryPressed} style={styles.changePhotoText}>
-                {t('wizard.retake', { defaultValue: 'Change Photo' })} →
+            <View style={styles.phoneRow}>
+              <IconPhone size={14} color={theme.colors.mutedText} />
+              <Text variant="body" color={theme.colors.mutedText} style={styles.phoneText}>
+                {profile.phone}
               </Text>
+            </View>
+
+            <TouchableOpacity onPress={showAvatarPickerOptions} activeOpacity={0.7} style={styles.changePhotoTouch}>
+              <Text variant="caption" color={theme.colors.primaryPressed} style={styles.changePhotoText}>
+                {t('wizard.retake', { defaultValue: 'Change Photo' })}
+              </Text>
+              <IconCaretRight size={12} color={theme.colors.primaryPressed} />
             </TouchableOpacity>
 
             <View style={styles.badgeRow}>
               <View style={styles.badge}>
+                {isCustomer ? (
+                  <IconUser size={13} color={theme.colors.ink} />
+                ) : (
+                  <PartnerTypeIcon size={13} color={theme.colors.ink} />
+                )}
                 <Text variant="caption" style={styles.badgeText}>
-                  {isCustomer ? '🧍 Customer' : partnerTypeLabel}
+                  {isCustomer ? t('profile.customer', { defaultValue: 'Customer' }) : partnerTypeLabel}
                 </Text>
               </View>
             </View>
@@ -343,7 +379,7 @@ export const ProfileScreen: React.FC = () => {
               <Text variant="body" style={styles.detailValue}>
                 {profile.full_name || '—'}
               </Text>
-              <Text style={styles.smallEditIcon}> ✏️</Text>
+              <IconPencilSimple size={12} color={theme.colors.mutedText} style={styles.smallEditIcon} />
             </TouchableOpacity>
           </View>
 
@@ -377,9 +413,12 @@ export const ProfileScreen: React.FC = () => {
                 <Text variant="caption" color={theme.colors.mutedText} style={styles.detailLabel}>
                   {t('profile.partnerTypeLabel', { defaultValue: 'Partner Role' })}
                 </Text>
-                <Text variant="body" style={styles.detailValue}>
-                  {partnerTypeLabel}
-                </Text>
+                <View style={styles.detailValueRow}>
+                  <PartnerTypeIcon size={15} color={theme.colors.ink} />
+                  <Text variant="body" style={styles.detailValue}>
+                    {partnerTypeLabel}
+                  </Text>
+                </View>
               </View>
 
               {profile.city && (
@@ -389,9 +428,12 @@ export const ProfileScreen: React.FC = () => {
                     <Text variant="caption" color={theme.colors.mutedText} style={styles.detailLabel}>
                       {t('profile.operatingCityLabel', { defaultValue: 'Operating City' })}
                     </Text>
-                    <Text variant="body" style={styles.detailValue}>
-                      📍 {profile.city}
-                    </Text>
+                    <View style={styles.detailValueRow}>
+                      <IconMapPin size={15} color={theme.colors.ink} />
+                      <Text variant="body" style={styles.detailValue}>
+                        {profile.city}
+                      </Text>
+                    </View>
                   </View>
                 </>
               )}
@@ -403,9 +445,12 @@ export const ProfileScreen: React.FC = () => {
                     <Text variant="caption" color={theme.colors.mutedText} style={styles.detailLabel}>
                       {t('profile.vehiclePlateLabel', { defaultValue: 'Vehicle Number' })}
                     </Text>
-                    <Text variant="body" style={styles.detailValue}>
-                      🚗 {plateNumber}
-                    </Text>
+                    <View style={styles.detailValueRow}>
+                      <IconCar size={15} color={theme.colors.ink} />
+                      <Text variant="body" style={styles.detailValue}>
+                        {plateNumber}
+                      </Text>
+                    </View>
                   </View>
                 </>
               ) : null}
@@ -420,8 +465,9 @@ export const ProfileScreen: React.FC = () => {
                   {t('profile.referralCodeLabel', { defaultValue: 'Referral Code' })}
                 </Text>
                 <TouchableOpacity onPress={handleShareReferral} style={styles.referralTouch}>
+                  <IconGift size={15} color={theme.colors.primaryPressed} />
                   <Text variant="body" style={styles.referralCodeVal}>
-                    🎁 {profile.referral_code}
+                    {profile.referral_code}
                   </Text>
                   <Text variant="caption" color={theme.colors.primary} style={styles.shareText}>
                     Share
@@ -441,14 +487,15 @@ export const ProfileScreen: React.FC = () => {
 
             <View style={styles.docRow}>
               <View style={styles.docInfo}>
-                <Text style={styles.docIcon}>🪪</Text>
+                <IconIdentificationCard size={20} color={theme.colors.mutedText} />
                 <Text variant="body" style={styles.docTitle}>
                   {t('profile.aadhaarDoc', { defaultValue: 'Aadhaar Card' })}
                 </Text>
               </View>
               <View style={[styles.docBadge, hasAadhaar ? styles.docBadgeUploaded : styles.docBadgePending]}>
+                {hasAadhaar && <IconCheck size={12} color={theme.colors.success} style={styles.docCheckIcon} />}
                 <Text variant="caption" style={hasAadhaar ? styles.docTextUploaded : styles.docTextPending}>
-                  {hasAadhaar ? `✓ ${t('profile.docUploaded', { defaultValue: 'Uploaded & stored' })}` : t('common.notSelected', { defaultValue: 'Not Uploaded' })}
+                  {hasAadhaar ? t('profile.docUploaded', { defaultValue: 'Uploaded & stored' }) : t('common.notSelected', { defaultValue: 'Not Uploaded' })}
                 </Text>
               </View>
             </View>
@@ -457,14 +504,15 @@ export const ProfileScreen: React.FC = () => {
 
             <View style={styles.docRow}>
               <View style={styles.docInfo}>
-                <Text style={styles.docIcon}>🪪</Text>
+                <IconIdentificationCard size={20} color={theme.colors.mutedText} />
                 <Text variant="body" style={styles.docTitle}>
                   {t('profile.licenceDoc', { defaultValue: 'Driving Licence' })}
                 </Text>
               </View>
               <View style={[styles.docBadge, hasLicence ? styles.docBadgeUploaded : styles.docBadgePending]}>
+                {hasLicence && <IconCheck size={12} color={theme.colors.success} style={styles.docCheckIcon} />}
                 <Text variant="caption" style={hasLicence ? styles.docTextUploaded : styles.docTextPending}>
-                  {hasLicence ? `✓ ${t('profile.docUploaded', { defaultValue: 'Uploaded & stored' })}` : t('common.notSelected', { defaultValue: 'Not Uploaded' })}
+                  {hasLicence ? t('profile.docUploaded', { defaultValue: 'Uploaded & stored' }) : t('common.notSelected', { defaultValue: 'Not Uploaded' })}
                 </Text>
               </View>
             </View>
@@ -504,8 +552,9 @@ export const ProfileScreen: React.FC = () => {
         {/* Log Out Action */}
         <View style={styles.actionsContainer}>
           <Button
-            label={t('auth.logout', { defaultValue: '🚪 Log out' })}
+            label={t('auth.logout', { defaultValue: 'Log out' })}
             variant="secondary"
+            icon={IconSignOut}
             onPress={handleLogout}
             style={styles.logoutBtn}
           />
@@ -537,7 +586,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: theme.spacing.lg,
-    borderWidth: 1.5,
+    borderWidth: 1,
     borderColor: theme.colors.border,
   },
   avatarTouchable: {
@@ -565,8 +614,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surface,
   },
   placeholderText: {
+    fontFamily: theme.fonts.medium,
     fontSize: 28,
-    fontWeight: 'bold',
+    fontWeight: '500',
     color: theme.colors.mutedText,
   },
   avatarLoadingOverlay: {
@@ -588,9 +638,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  cameraIcon: {
-    fontSize: 12,
-  },
   headerDetails: {
     flex: 1,
     gap: 4,
@@ -601,33 +648,45 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   nameText: {
+    fontFamily: theme.fonts.medium,
     fontSize: 22,
-    fontWeight: '700',
-  },
-  editNameIcon: {
-    fontSize: 14,
+    fontWeight: '500',
   },
   nameValTouch: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   smallEditIcon: {
-    fontSize: 12,
+    marginLeft: 4,
+  },
+  phoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   phoneText: {
     fontSize: 15,
   },
+  changePhotoTouch: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    marginTop: 2,
+  },
   changePhotoText: {
-    fontWeight: '600',
+    fontFamily: theme.fonts.medium,
+    fontWeight: '500',
     fontSize: 13,
     textDecorationLine: 'underline',
-    marginTop: 2,
   },
   badgeRow: {
     flexDirection: 'row',
     marginTop: 4,
   },
   badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     backgroundColor: theme.colors.surface,
     borderRadius: theme.radius.sm,
     paddingHorizontal: theme.spacing.sm,
@@ -636,17 +695,19 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
   },
   badgeText: {
-    fontWeight: '600',
+    fontFamily: theme.fonts.medium,
+    fontWeight: '500',
     fontSize: 13,
     color: theme.colors.ink,
   },
   sectionCard: {
     padding: theme.spacing.lg,
-    borderWidth: 1.5,
+    borderWidth: 1,
     borderColor: theme.colors.border,
   },
   sectionHeader: {
-    fontWeight: '700',
+    fontFamily: theme.fonts.medium,
+    fontWeight: '500',
     fontSize: 18,
     marginBottom: theme.spacing.md,
   },
@@ -657,13 +718,20 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing.xs,
   },
   detailLabel: {
+    fontFamily: theme.fonts.medium,
     fontWeight: '500',
     fontSize: 15,
   },
   detailValue: {
-    fontWeight: '600',
+    fontFamily: theme.fonts.medium,
+    fontWeight: '500',
     fontSize: 15,
     textAlign: 'right',
+  },
+  detailValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   divider: {
     height: 1,
@@ -676,11 +744,13 @@ const styles = StyleSheet.create({
     gap: theme.spacing.xs,
   },
   referralCodeVal: {
-    fontWeight: '700',
+    fontFamily: theme.fonts.medium,
+    fontWeight: '500',
     color: theme.colors.primaryPressed,
   },
   shareText: {
-    fontWeight: '600',
+    fontFamily: theme.fonts.medium,
+    fontWeight: '500',
     textDecorationLine: 'underline',
   },
   docRow: {
@@ -694,17 +764,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: theme.spacing.sm,
   },
-  docIcon: {
-    fontSize: 20,
-  },
   docTitle: {
-    fontWeight: '600',
+    fontFamily: theme.fonts.medium,
+    fontWeight: '500',
     fontSize: 16,
   },
   docBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
     borderRadius: theme.radius.sm,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: 4,
+  },
+  docCheckIcon: {
+    marginRight: 4,
   },
   docBadgeUploaded: {
     backgroundColor: '#E8F5E9',
@@ -714,11 +787,13 @@ const styles = StyleSheet.create({
   },
   docTextUploaded: {
     color: '#1B7A3D',
-    fontWeight: '700',
+    fontFamily: theme.fonts.medium,
+    fontWeight: '500',
     fontSize: 13,
   },
   docTextPending: {
     color: theme.colors.mutedText,
+    fontFamily: theme.fonts.medium,
     fontWeight: '500',
     fontSize: 13,
   },

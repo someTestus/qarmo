@@ -31,22 +31,18 @@
     "rides": "Rides",
     "earnings": "Earnings",
     "referrals": "Referrals",
-    "ridePartner": "🛺 Ride Partner",
-    "deliveryPartner": "🛵 Delivery Partner"
+    "ridePartner": "Ride Partner",
+    "deliveryPartner": "Delivery Partner"
   },
   "accountType": {
     "title": "How will you use Qarmo?",
     "customer": "Customer",
-    "partner": "Partner",
-    "customerIcon": "🧍",
-    "partnerIcon": "🛺"
+    "partner": "Partner"
   },
   "partnerType": {
     "title": "What do you do?",
     "delivery": "Delivery Partner",
-    "ride": "Ride Partner",
-    "deliveryIcon": "🛵",
-    "rideIcon": "🛺"
+    "ride": "Ride Partner"
   },
   "wizard": {
     "nameAndPhoto": "Your Details",
@@ -93,6 +89,7 @@
     "uploadDocument": "Upload document",
     "uploadFailed": "Upload failed.",
     "tryAgain": "Try again",
+    "chooseAccountType": "Choose Customer or Partner to continue",
     "addPhotoToContinue": "Add a photo to continue",
     "addDocumentToContinue": "Add a document to continue",
     "enterNameToContinue": "Enter your name to continue",
@@ -161,7 +158,9 @@
     "friendJoinedSingular": "1 friend joined",
     "friendsJoinedPlural": "{{count}} friends joined",
     "unknownCity": "Unknown City",
-    "shareMessage": "Join Qarmo with my code {{code}}"
+    "shareMessage": "Join Qarmo with my code {{code}}",
+    "codeCopied": "Code copied",
+    "codeNotReady": "Your referral code is still being generated. Please try again in a moment."
   },
   "profile": {
     "memberSince": "Member since {{date}}",

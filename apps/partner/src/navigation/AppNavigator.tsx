@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -6,85 +6,56 @@ import {
   TouchableOpacity,
   Platform,
   Alert,
+  BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { theme, Text, Button } from '@qarmo/ui';
+import { theme, Text, Button, IconHouse, IconMapTrifold, IconList, IconCpu, IconUser } from '@qarmo/ui';
 import { useTranslation } from '@qarmo/i18n';
 import { useAuth } from '../hooks/useAuth';
 import { useWizard } from '../hooks/useWizard';
 import { supabase } from '@qarmo/supabase';
 
-// Screens — Auth
-import { LandingScreen } from '../screens/LandingScreen';
+// Screens — Auth entry
+import { WelcomeScreen } from '../screens/WelcomeScreen';
 
-// Screens — Pre-auth selection
-import { AccountTypeScreen } from '../screens/AccountTypeScreen';
-import { PartnerTypeScreen } from '../screens/PartnerTypeScreen';
-
-// Screens — Wizard (phone/OTP inside wizard)
+// Screens — Phone/OTP verification
 import { WizardPhoneScreen } from '../screens/WizardPhoneScreen';
 import { WizardOTPScreen } from '../screens/WizardOTPScreen';
-import { WizardNameScreen } from '../screens/WizardNameScreen';
-import { WizardPlateScreen } from '../screens/WizardPlateScreen';
-import { WizardCityScreen } from '../screens/WizardCityScreen';
-import { WizardPhotoScreen } from '../screens/WizardPhotoScreen';
-import { WizardDocumentScreen } from '../screens/WizardDocumentScreen';
-import { WizardReferralScreen } from '../screens/WizardReferralScreen';
+
+// Screens — Onboarding (new users, single dynamic screen)
+import { OnboardingScreen } from '../screens/OnboardingScreen';
 
 // Screens — App
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { CustomerMapScreen } from '../screens/CustomerMapScreen';
 import { ComingSoonScreen } from '../screens/ComingSoonScreen';
+import { AiAgentScreen } from '../screens/AiAgentScreen';
 
-import { Ionicons } from '@expo/vector-icons';
 import { usePartnerLocation } from '../hooks/usePartnerLocation';
-import { compressImage } from '../utils/image';
+import { compressImage, uriToUploadBody } from '../utils/image';
+import { logger } from '../utils/logger';
 
+const TAG = 'Wizard';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Flow types
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Pre-auth screens (unauthenticated)
- *  landing       → Landing page
- *  accountType   → Customer / Partner pick
- *  partnerType   → Delivery / Ride pick (partner only)
- *  phone         → Phone number entry (inside wizard)
- *  otp           → OTP verification (inside wizard)
+ * Pre-auth screens (unauthenticated):
+ *  welcome → single entry page (image + Get started)
+ *  phone   → phone number entry
+ *  otp     → OTP verification
+ *
+ * There is no Register/Login split — everyone follows welcome → phone → otp.
+ * After OTP the user is authenticated and routing is decided purely by
+ * profile.profile_completed_at: incomplete → OnboardingScreen, complete → app.
  */
-type PreAuthScreen = 'landing' | 'accountType' | 'partnerType' | 'phone' | 'otp';
+type PreAuthScreen = 'welcome' | 'phone' | 'otp';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Step definitions
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Customer wizard steps (after OTP):
- *   1 → name (finish)
- * Total rendered steps in dots: phone=1, otp=2, name=3
- */
-const CUSTOMER_TOTAL_STEPS = 3;
-
-/**
- * Partner wizard steps (after OTP):
- *   1 → name, 2 → plate, 3 → city, 4 → photo, 5 → aadhaar, 6 → licence, 7 → referral
- * Total rendered steps in dots: phone=1, otp=2, then partner steps 3–9
- */
-const PARTNER_POST_OTP_STEPS = 7;
-const PARTNER_TOTAL_STEPS = 2 + PARTNER_POST_OTP_STEPS; // = 9
-
-// partner post-OTP step numbers (1-indexed within post-OTP range)
-enum PartnerStep {
-  Name = 1,
-  Plate = 2,
-  City = 3,
-  Photo = 4,
-  Aadhaar = 5,
-  DrivingLicence = 6,
-  Referral = 7,
-}
+// Phone + OTP render a 2-step progress; new users then get the onboarding screen.
+const AUTH_TOTAL_STEPS = 2;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AppNavigator
@@ -92,11 +63,9 @@ enum PartnerStep {
 
 export const AppNavigator: React.FC = () => {
   const { t } = useTranslation();
-  const { user, profile, loading, isCheckingProfile, signOut, refreshProfile } = useAuth();
+  const { user, profile, loading, isCheckingProfile, profileFetchError, signOut, refreshProfile } = useAuth();
 
   const {
-    step,
-    setStep,
     formData,
     updateFormData,
     resetWizard,
@@ -106,13 +75,140 @@ export const AppNavigator: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'home' | 'tab2' | 'profile'>('home');
 
   // Pre-auth navigation state
-  const [preAuthScreen, setPreAuthScreen] = useState<PreAuthScreen>('landing');
+  const [preAuthScreen, setPreAuthScreen] = useState<PreAuthScreen>('welcome');
   // Phone formatted for OTP (e.g. "+919876543210")
   const [otpPhone, setOtpPhone] = useState('');
-  // Whether user came through "Log in" (vs "Register")
-  const [isLoginMode, setIsLoginMode] = useState(false);
+  // Raw digits typed on the phone screen, kept here (not just in WizardPhoneScreen's own
+  // state) so backing out of the OTP screen restores them instead of remounting to blank.
+  const [phoneDigits, setPhoneDigits] = useState('');
+
+  // These are local UI state, not auth state — signOut() (in useAuth) has no way to
+  // reset them itself. Without this, signing out leaves preAuthScreen wherever it was
+  // last (e.g. 'otp'), so the very next unauthenticated render reuses that stale value
+  // instead of starting over from Welcome. resetWizard() is included too: signOut()
+  // already clears the *persisted* wizard progress, but the in-memory formData here
+  // would otherwise still hold the previous account's name/photo/etc. if someone
+  // registers a different account right after logging out.
+  useEffect(() => {
+    if (user) return;
+    setPreAuthScreen('welcome');
+    setOtpPhone('');
+    setPhoneDigits('');
+    setActiveTab('home');
+    resetWizard();
+  }, [user, resetWizard]);
 
   const { locationError } = usePartnerLocation();
+
+  // Going back from onboarding would otherwise silently sign the user out
+  // (they're already OTP-authenticated) — confirm first instead of discarding the session.
+  const confirmDiscardAndSignOut = useCallback(() => {
+    const title = t('wizard.discardConfirmTitle', { defaultValue: 'Sign out?' });
+    const message = t('wizard.discardConfirmMessage', {
+      defaultValue: 'Going back will sign you out — you will need to verify your phone again to continue.',
+    });
+
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`)) {
+        signOut();
+      }
+      return;
+    }
+
+    Alert.alert(title, message, [
+      { text: t('common.cancel', { defaultValue: 'Cancel' }), style: 'cancel' },
+      { text: t('auth.logout', { defaultValue: 'Log out' }), style: 'destructive', onPress: () => signOut() },
+    ]);
+  }, [t, signOut]);
+
+  // ───── Android hardware back button ────────────────────────────────────────
+  // Mirrors each screen's own onBack wiring so the hardware back button behaves
+  // the same as tapping the on-screen back/cancel action.
+  const handleHardwareBack = useCallback((): boolean => {
+    // Main app (tabs) — profile complete
+    if (user && profile?.profile_completed_at) {
+      if (activeTab !== 'home') {
+        setActiveTab('home');
+        return true;
+      }
+      return false; // on Home tab — let the OS handle it (minimize/exit)
+    }
+
+    // Post-OTP — single onboarding screen. Back here discards the (already
+    // authenticated) session, so confirm before signing out.
+    if (user && !profile?.profile_completed_at) {
+      confirmDiscardAndSignOut();
+      return true;
+    }
+
+    // Pre-auth flow
+    if (!user) {
+      switch (preAuthScreen) {
+        case 'welcome':
+          return false; // let the OS handle it (exit app)
+        case 'phone':
+          setPreAuthScreen('welcome');
+          return true;
+        case 'otp':
+          setPreAuthScreen('phone');
+          return true;
+        default:
+          return false;
+      }
+    }
+
+    return false;
+  }, [user, profile, activeTab, preAuthScreen, confirmDiscardAndSignOut]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', handleHardwareBack);
+    return () => subscription.remove();
+  }, [handleHardwareBack]);
+
+  // ───── Web browser back/forward ────────────────────────────────────────────
+  // The URL doesn't reflect the current screen (refresh still lands on Welcome) —
+  // this only makes the browser's back/forward buttons step through screens the
+  // same way the Android hardware back button does above, by pushing a history
+  // entry whenever the visible screen changes and replaying handleHardwareBack on
+  // popstate.
+  const currentScreenKey = !user
+    ? `preauth:${preAuthScreen}`
+    : !profile?.profile_completed_at
+    ? 'onboarding'
+    : `tab:${activeTab}`;
+
+  const isHandlingPopRef = useRef(false);
+  const lastPushedScreenKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+    if (isHandlingPopRef.current) {
+      isHandlingPopRef.current = false;
+    } else if (lastPushedScreenKeyRef.current !== null) {
+      window.history.pushState({ screenKey: currentScreenKey }, '');
+    }
+    lastPushedScreenKeyRef.current = currentScreenKey;
+  }, [currentScreenKey]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+    const onPopState = () => {
+      isHandlingPopRef.current = true;
+      handleHardwareBack();
+      // Safety net: if handleHardwareBack didn't change any state (e.g. it only opened
+      // a confirm dialog), the effect above never runs to clear this flag — clear it
+      // here so the next real navigation still pushes its own history entry.
+      setTimeout(() => {
+        isHandlingPopRef.current = false;
+      }, 0);
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [handleHardwareBack]);
 
   // ───── Loading states ─────────────────────────────────────────────────────
 
@@ -128,8 +224,11 @@ export const AppNavigator: React.FC = () => {
   }
 
   // ───── Error loading profile ───────────────────────────────────────────────
+  // Note: a null profile with no fetch error means the row simply doesn't exist yet
+  // (e.g. right after signup, before the DB trigger creates it) — that falls through
+  // to the onboarding screen below rather than showing a hard error.
 
-  if (user && !profile) {
+  if (user && !profile && profileFetchError) {
     return (
       <SafeAreaView style={styles.loadingContainer}>
         <Text variant="body" color={theme.colors.danger} style={{ marginBottom: theme.spacing.md }}>
@@ -154,101 +253,41 @@ export const AppNavigator: React.FC = () => {
   // ───── Not logged in — pre-auth flow ──────────────────────────────────────
 
   if (!user) {
-    // Landing
-    if (preAuthScreen === 'landing') {
-      return (
-        <LandingScreen
-          onRegister={() => {
-            setIsLoginMode(false);
-            setPreAuthScreen('accountType');
-          }}
-          onLogin={() => {
-            setIsLoginMode(true);
-            // Login goes straight to phone entry
-            updateFormData({ accountType: '' }); // clear, will be set after OTP from profile
-            setPreAuthScreen('phone');
-          }}
-        />
-      );
+    // Welcome — single entry point (no Register/Login split)
+    if (preAuthScreen === 'welcome') {
+      return <WelcomeScreen onContinue={() => setPreAuthScreen('phone')} />;
     }
 
-    // Account type selection (Register path only)
-    if (preAuthScreen === 'accountType') {
-      return (
-        <AccountTypeScreen
-          onSelectCustomer={() => {
-            updateFormData({ accountType: 'customer', partnerType: '' });
-            setPreAuthScreen('phone');
-          }}
-          onSelectPartner={() => {
-            updateFormData({ accountType: 'partner' });
-            setPreAuthScreen('partnerType');
-          }}
-        />
-      );
-    }
-
-    // Partner type selection
-    if (preAuthScreen === 'partnerType') {
-      return (
-        <PartnerTypeScreen
-          onSelectDelivery={() => {
-            updateFormData({ partnerType: 'delivery' });
-            setPreAuthScreen('phone');
-          }}
-          onSelectRide={() => {
-            updateFormData({ partnerType: 'auto' });
-            setPreAuthScreen('phone');
-          }}
-          onBack={() => setPreAuthScreen('accountType')}
-        />
-      );
-    }
-
-    // Phone entry (inside wizard)
+    // Phone entry
     if (preAuthScreen === 'phone') {
-      const isCustomer = formData.accountType === 'customer';
-      const currentStep = 1;
-      const totalSteps = isLoginMode ? 2 : (isCustomer ? CUSTOMER_TOTAL_STEPS : PARTNER_TOTAL_STEPS);
-
       return (
         <WizardPhoneScreen
-          currentStep={currentStep}
-          totalSteps={totalSteps}
-          onOtpSent={(formattedPhone) => {
+          currentStep={1}
+          totalSteps={AUTH_TOTAL_STEPS}
+          initialPhone={phoneDigits}
+          onOtpSent={(formattedPhone, rawPhone) => {
             setOtpPhone(formattedPhone);
+            setPhoneDigits(rawPhone);
             setPreAuthScreen('otp');
           }}
-          onBack={() => {
-            if (isLoginMode) {
-              setPreAuthScreen('landing');
-            } else if (formData.accountType === 'partner') {
-              setPreAuthScreen('partnerType');
-            } else {
-              setPreAuthScreen('accountType');
-            }
-          }}
+          onBack={() => setPreAuthScreen('welcome')}
         />
       );
     }
 
-    // OTP entry (inside wizard)
+    // OTP verification
     if (preAuthScreen === 'otp') {
-      const isCustomer = formData.accountType === 'customer';
-      const currentStep = 2;
-      const totalSteps = isLoginMode ? 2 : (isCustomer ? CUSTOMER_TOTAL_STEPS : PARTNER_TOTAL_STEPS);
-
       return (
         <WizardOTPScreen
           phone={otpPhone}
-          currentStep={currentStep}
-          totalSteps={totalSteps}
+          currentStep={2}
+          totalSteps={AUTH_TOTAL_STEPS}
           onVerified={() => {
-            // After OTP, the auth state listener in useAuth will set `user`.
-            // If login mode: useAuth will load profile → profile.profile_completed_at set → goes to app.
-            // If register mode: user is set but profile is incomplete → post-OTP wizard steps start.
-            // Set initial wizard step to 1 (post-OTP) — handled below.
-            setStep(1);
+            // No explicit transition here: verifyOTP() (awaited inside WizardOTPScreen
+            // before this fires) already updated `user`/`profile`, which re-renders this
+            // component into the onboarding or app branch below depending on
+            // profile_completed_at. A brand-new signup lands on onboarding; a returning
+            // user with a completed profile lands straight on the app.
           }}
           onBack={() => setPreAuthScreen('phone')}
         />
@@ -258,120 +297,117 @@ export const AppNavigator: React.FC = () => {
     return null;
   }
 
-  // ───── Logged in, profile incomplete — wizard steps (post-OTP) ───────────
+  // ───── Logged in, profile incomplete — onboarding (new users only) ─────────
 
   if (!profile?.profile_completed_at) {
-    const isCustomer = formData.accountType === 'customer' ||
-      (profile?.account_type === 'customer' && formData.accountType === '');
+    const handleCustomerFinish = async () => {
+      if (!user) return;
+      const done = logger.time(TAG, 'handleCustomerFinish');
+      try {
+        let { error } = await supabase.from('profiles').update({
+          full_name: formData.fullName,
+          account_type: 'customer',
+          profile_completed_at: new Date().toISOString(),
+        }).eq('id', user.id);
 
-    // ── Customer wizard: step 1 → Name ──────────────────────────────────────
-    if (isCustomer) {
-      // step 1 = name (= step 3 in total dots: 1=phone, 2=otp, 3=name)
-      const dotStep = 3;
-      const totalDots = CUSTOMER_TOTAL_STEPS;
-
-      const handleCustomerFinish = async () => {
-        if (!user) return;
-        try {
-          let { error } = await supabase.from('profiles').update({
+        // Fallback if account_type column does not exist on Supabase DB schema yet
+        if (error && (error.code === 'PGRST204' || error.message?.includes('account_type'))) {
+          logger.warn(TAG, 'Direct update missing account_type column — retrying without it', { code: error.code });
+          const fallbackRes = await supabase.from('profiles').update({
             full_name: formData.fullName,
-            account_type: 'customer',
             profile_completed_at: new Date().toISOString(),
           }).eq('id', user.id);
-
-          // Fallback if account_type column does not exist on Supabase DB schema yet
-          if (error && (error.code === 'PGRST204' || error.message?.includes('account_type'))) {
-            const fallbackRes = await supabase.from('profiles').update({
-              full_name: formData.fullName,
-              profile_completed_at: new Date().toISOString(),
-            }).eq('id', user.id);
-            error = fallbackRes.error;
-          }
-
-          if (error) throw error;
-          await resetWizard();
-          await refreshProfile();
-        } catch (err: any) {
-          console.error('Customer finish error:', err);
-          Alert.alert(
-            t('common.error', { defaultValue: 'Error' }),
-            err.message || t('wizard.errors.completionFailed', { defaultValue: 'Failed to complete profile.' }),
-          );
+          error = fallbackRes.error;
         }
-      };
 
-      return (
-        <SafeAreaView style={styles.safe}>
-          <WizardNameScreen
-            formData={formData}
-            onUpdate={updateFormData}
-            onNext={handleCustomerFinish}
-            onBack={() => {
-              // For customers back from name goes back to landing (they haven't entered partner data)
-              signOut();
-            }}
-            currentStep={dotStep}
-            totalSteps={totalDots}
-            actionLabel={t('wizard.finish', { defaultValue: 'Finish' })}
-          />
-        </SafeAreaView>
-      );
-    }
-
-    // ── Partner wizard: steps 1–7 (post-OTP) ────────────────────────────────
-    const dotOffset = 2; // phone=1, otp=2 already counted
+        if (error) throw error;
+        done('ok');
+        await resetWizard();
+        await refreshProfile();
+      } catch (err: any) {
+        console.error('Customer finish error:', err);
+        done('fail', { message: err?.message });
+        // Rethrow so OnboardingScreen clears its submitting state and surfaces the
+        // error inline (the partner path already resolves on its own internal warnings).
+        throw err;
+      }
+    };
 
     const handlePartnerSubmit = async (validReferralCode: string | null) => {
       if (!user) return;
+      logger.info(TAG, 'handlePartnerSubmit — started', {
+        hasPhoto: !!formData.photoUri,
+        hasAadhaar: !!formData.aadhaarUri,
+        hasLicence: !!formData.drivingLicenceUri,
+        hasReferralCode: !!validReferralCode,
+      });
 
       let avatarPath: string | null = null;
 
-      // 1. Upload profile photo to avatars bucket
+      // 1. Upload profile photo to avatars bucket (best-effort — same as document
+      // uploads below: a flaky upload here shouldn't block the rest of registration,
+      // since the profile update step already tolerates a null avatarPath).
       if (formData.photoUri) {
+        const donePhoto = logger.time(TAG, 'Upload avatar photo');
         try {
           const compressedPhotoUri = await compressImage(formData.photoUri, 800, 0.7);
-          const response = await fetch(compressedPhotoUri);
-          const blob = await response.blob();
+          const body = await uriToUploadBody(compressedPhotoUri);
           const fileName = `${user.id}/profile.jpg`;
           const { error: uploadErr } = await supabase.storage
             .from('avatars')
-            .upload(fileName, blob, { contentType: 'image/jpeg', upsert: true });
+            .upload(fileName, body, { contentType: 'image/jpeg', upsert: true });
           if (uploadErr) throw new Error('Failed to upload photo: ' + uploadErr.message);
           const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(fileName);
           avatarPath = publicUrlData.publicUrl;
+          donePhoto('ok', { bodySize: body instanceof ArrayBuffer ? body.byteLength : body.size });
         } catch (photoErr: any) {
-          throw photoErr;
+          console.warn('Photo upload warning:', photoErr.message);
+          donePhoto('fail', { message: photoErr?.message });
         }
       }
 
       // 2. Upload documents to partner-documents bucket (fallback to avatars if bucket migration not run)
       const uploadDoc = async (uri: string, docType: 'aadhaar' | 'driving_licence') => {
+        const doneDoc = logger.time(TAG, `Upload document (${docType})`);
         try {
           const compressedDocUri = await compressImage(uri, 1200, 0.75);
-          const response = await fetch(compressedDocUri);
-          const blob = await response.blob();
+          const body = await uriToUploadBody(compressedDocUri);
+          const bodySize = body instanceof ArrayBuffer ? body.byteLength : body.size;
           const ext = 'jpg';
           const storagePath = `${user.id}/${docType}.${ext}`;
-          
+
           let { error: uploadErr } = await supabase.storage
             .from('partner-documents')
-            .upload(storagePath, blob, { contentType: 'image/jpeg', upsert: true });
+            .upload(storagePath, body, { contentType: 'image/jpeg', upsert: true });
 
           // Fallback to 'avatars' bucket if 'partner-documents' bucket does not exist on Supabase yet
           if (uploadErr && (uploadErr.message?.includes('not found') || uploadErr.message?.includes('Bucket'))) {
+            logger.warn(TAG, `partner-documents bucket unavailable for ${docType} — falling back to avatars bucket`, {
+              message: uploadErr.message,
+            });
             const fallbackPath = `${user.id}/docs/${docType}.${ext}`;
             const { error: fallbackErr } = await supabase.storage
               .from('avatars')
-              .upload(fallbackPath, blob, { contentType: 'image/jpeg', upsert: true });
-            
-            if (!fallbackErr) return fallbackPath;
+              .upload(fallbackPath, body, { contentType: 'image/jpeg', upsert: true });
+
+            if (!fallbackErr) {
+              doneDoc('ok', { path: fallbackPath, viaFallbackBucket: true, bodySize });
+              return fallbackPath;
+            }
           }
 
           if (uploadErr) throw new Error(`Failed to upload ${docType}: ` + uploadErr.message);
+          doneDoc('ok', { path: storagePath, bodySize });
           return storagePath;
         } catch (err: any) {
-          console.warn(`Doc upload warning for ${docType}:`, err.message);
-          return null;
+          // Aadhaar/licence are the required compliance documents (B-22/B-23) — unlike the
+          // best-effort avatar upload above, a failure here must stop Finish (B-25) rather
+          // than silently completing registration with a missing partner_documents row.
+          // console.warn (unlike logger, which is __DEV__-only) is the one trace of this
+          // that survives in a production build, so it stays even though it duplicates doneDoc.
+          console.warn(`Doc upload failed for ${docType}:`, err?.message);
+          doneDoc('fail', { message: err?.message });
+          throw new Error(t('wizard.errors.uploadFailed', { defaultValue: 'Upload failed. Try again.' }));
         }
       };
 
@@ -413,45 +449,28 @@ export const AppNavigator: React.FC = () => {
         if (error) console.warn('Failed to save licence DB record:', error.message);
       }
 
-      // 4. Build role/vehicle object for the complete-profile edge function
+      // 4. Build role/vehicle object for the complete-profile edge function.
+      // `partnerType` here and `profile?.partner_type` (DB) both use 'ride'/'delivery' —
+      // previously this compared against a stray 'auto' left over from the wizard's old
+      // internal naming, so a partner whose type came from `profile?.partner_type` (the
+      // fallback) was silently misclassified as delivery even when they were a ride partner.
       const partnerType = formData.partnerType || profile?.partner_type || 'delivery';
-      const roles = partnerType === 'auto' ? ['auto_driver'] : ['delivery_executive'];
+      const roles = partnerType === 'ride' ? ['auto_driver'] : ['delivery_executive'];
       const vehicleRole = roles[0];
       const vehiclesPayload = {
         [vehicleRole]: {
-          vehicleType: partnerType === 'auto' ? 'auto' : 'bike',
+          vehicleType: partnerType === 'ride' ? 'auto' : 'bike',
           registrationNumber: formData.plateNumber || '',
         },
       };
 
-      // 5. Direct database update on profiles table as a baseline guarantee
-      let { error: directUpdateErr } = await supabase.from('profiles').update({
-        full_name: formData.fullName,
-        city: formData.city,
-        account_type: 'partner',
-        partner_type: partnerType === 'auto' ? 'ride' : 'delivery',
-        plate_number: formData.plateNumber || null,
-        referred_by: validReferralCode || null,
-        photo_url: avatarPath || profile?.photo_url || null,
-        profile_completed_at: new Date().toISOString(),
-      }).eq('id', user.id);
-
-      if (directUpdateErr && (directUpdateErr.code === 'PGRST204' || directUpdateErr.message?.includes('column'))) {
-        // Fallback update for standard profiles columns if new schema columns are missing
-        const fallbackRes = await supabase.from('profiles').update({
-          full_name: formData.fullName,
-          city: formData.city,
-          photo_url: avatarPath || profile?.photo_url || null,
-          profile_completed_at: new Date().toISOString(),
-        }).eq('id', user.id);
-        directUpdateErr = fallbackRes.error;
-      }
-
-      if (directUpdateErr) {
-        console.warn('Direct profile update warning:', directUpdateErr.message);
-      }
-
-      // 6. Invoke complete-profile edge function (for referrals & vehicle insertion)
+      // 5. Invoke complete-profile edge function FIRST (for referral-code generation,
+      // referral awarding & vehicle insertion). This must run before the direct
+      // update below: the complete_profile RPC only generates a referral_code while
+      // profile_completed_at is still null, so if the direct baseline update stamped
+      // profile_completed_at first, the RPC would short-circuit on its idempotency
+      // guard and the partner would never get a code (dashboard "Your code:" blank).
+      const doneEdgeFn = logger.time(TAG, 'Invoke complete-profile edge function');
       try {
         const { data: funcData, error: funcError } = await supabase.functions.invoke('complete-profile', {
           body: {
@@ -465,127 +484,99 @@ export const AppNavigator: React.FC = () => {
         });
 
         if (funcError || (funcData as any)?.error) {
-          console.warn('complete-profile function warning:', funcError?.message || (funcData as any)?.error);
+          let message = funcError?.message || (funcData as any)?.error;
+          // FunctionsHttpError.context is the raw Response — the generic .message
+          // ("Edge Function returned a non-2xx status code") hides the function's
+          // actual reason, which is in the response body.
+          if ((funcError as any)?.context?.json) {
+            try {
+              const body = await (funcError as any).context.json();
+              message = body?.error || message;
+            } catch {
+              // context body wasn't JSON — keep the generic message
+            }
+          }
+          console.warn('complete-profile function warning:', message);
+          doneEdgeFn('fail', { message });
+        } else {
+          doneEdgeFn('ok', {
+            success: (funcData as any)?.success ?? null,
+            referralCode: (funcData as any)?.referral_code ?? null,
+            response: funcData,
+          });
         }
       } catch (funcErr: any) {
         console.warn('Edge function invoke exception:', funcErr.message);
+        doneEdgeFn('fail', { message: funcErr?.message });
       }
 
+      // 6. Direct database update on profiles table as a baseline guarantee and to
+      // persist partner-only columns the RPC doesn't set (plate_number, referred_by).
+      // Runs AFTER the edge function so it never pre-empts referral-code generation;
+      // it deliberately does not touch referral_code, so the RPC-generated code stays.
+      const doneDirectUpdate = logger.time(TAG, 'Direct profile update (baseline)');
+      let { error: directUpdateErr } = await supabase.from('profiles').update({
+        full_name: formData.fullName,
+        city: formData.city,
+        account_type: 'partner',
+        partner_type: partnerType,
+        plate_number: formData.plateNumber || null,
+        referred_by: validReferralCode || null,
+        photo_url: avatarPath || profile?.photo_url || null,
+        profile_completed_at: new Date().toISOString(),
+      }).eq('id', user.id);
+
+      if (directUpdateErr && (directUpdateErr.code === 'PGRST204' || directUpdateErr.message?.includes('column'))) {
+        logger.warn(TAG, 'Direct update hit a missing column — retrying with the base column set', {
+          code: directUpdateErr.code,
+        });
+        // Fallback update for standard profiles columns if new schema columns are missing
+        const fallbackRes = await supabase.from('profiles').update({
+          full_name: formData.fullName,
+          city: formData.city,
+          photo_url: avatarPath || profile?.photo_url || null,
+          profile_completed_at: new Date().toISOString(),
+        }).eq('id', user.id);
+        directUpdateErr = fallbackRes.error;
+      }
+
+      if (directUpdateErr) {
+        console.warn('Direct profile update warning:', directUpdateErr.message);
+        doneDirectUpdate('fail', { message: directUpdateErr.message });
+      } else {
+        doneDirectUpdate('ok');
+      }
+
+      logger.info(TAG, 'handlePartnerSubmit — finished, resetting wizard');
       await resetWizard();
-      await refreshProfile();
+
+      // Read the profile back from the DB to confirm completeProfile actually
+      // landed — profile_completed_at present is what flips onboarding → dashboard,
+      // and referral_code present proves the edge-function RPC generated a code.
+      const finalProfile = await refreshProfile();
+      logger.info(TAG, 'handlePartnerSubmit — verification', {
+        profileCompleted: !!finalProfile?.profile_completed_at,
+        completedAt: finalProfile?.profile_completed_at ?? null,
+        hasReferralCode: !!finalProfile?.referral_code,
+        referralCode: finalProfile?.referral_code ?? null,
+        accountType: finalProfile?.account_type ?? null,
+      });
+      if (!finalProfile?.profile_completed_at) {
+        logger.warn(TAG, 'handlePartnerSubmit — completeProfile did NOT persist profile_completed_at', {
+          userId: user.id,
+        });
+      }
     };
 
-    switch (step) {
-      case PartnerStep.Name:
-        return (
-          <SafeAreaView style={styles.safe}>
-            <WizardNameScreen
-              formData={formData}
-              onUpdate={updateFormData}
-              onNext={() => setStep(PartnerStep.Plate)}
-              onBack={() => signOut()}
-              currentStep={dotOffset + PartnerStep.Name}
-              totalSteps={PARTNER_TOTAL_STEPS}
-            />
-          </SafeAreaView>
-        );
-
-      case PartnerStep.Plate:
-        return (
-          <SafeAreaView style={styles.safe}>
-            <WizardPlateScreen
-              formData={formData}
-              onUpdate={updateFormData}
-              onNext={() => setStep(PartnerStep.City)}
-              onBack={() => setStep(PartnerStep.Name)}
-              currentStep={dotOffset + PartnerStep.Plate}
-              totalSteps={PARTNER_TOTAL_STEPS}
-            />
-          </SafeAreaView>
-        );
-
-      case PartnerStep.City:
-        return (
-          <SafeAreaView style={styles.safe}>
-            <WizardCityScreen
-              formData={formData}
-              onUpdate={updateFormData}
-              onNext={() => setStep(PartnerStep.Photo)}
-              onBack={() => setStep(PartnerStep.Plate)}
-              currentStep={dotOffset + PartnerStep.City}
-              totalSteps={PARTNER_TOTAL_STEPS}
-            />
-          </SafeAreaView>
-        );
-
-      case PartnerStep.Photo:
-        return (
-          <SafeAreaView style={styles.safe}>
-            <WizardPhotoScreen
-              formData={formData}
-              onUpdate={updateFormData}
-              onNext={() => setStep(PartnerStep.Aadhaar)}
-              onBack={() => setStep(PartnerStep.City)}
-              currentStep={dotOffset + PartnerStep.Photo}
-              totalSteps={PARTNER_TOTAL_STEPS}
-            />
-          </SafeAreaView>
-        );
-
-      case PartnerStep.Aadhaar:
-        return (
-          <SafeAreaView style={styles.safe}>
-            <WizardDocumentScreen
-              docType="aadhaar"
-              fieldKey="aadhaarUri"
-              formData={formData}
-              onUpdate={updateFormData}
-              onNext={() => setStep(PartnerStep.DrivingLicence)}
-              onBack={() => setStep(PartnerStep.Photo)}
-              currentStep={dotOffset + PartnerStep.Aadhaar}
-              totalSteps={PARTNER_TOTAL_STEPS}
-            />
-          </SafeAreaView>
-        );
-
-      case PartnerStep.DrivingLicence:
-        return (
-          <SafeAreaView style={styles.safe}>
-            <WizardDocumentScreen
-              docType="driving_licence"
-              fieldKey="drivingLicenceUri"
-              formData={formData}
-              onUpdate={updateFormData}
-              onNext={() => setStep(PartnerStep.Referral)}
-              onBack={() => setStep(PartnerStep.Aadhaar)}
-              currentStep={dotOffset + PartnerStep.DrivingLicence}
-              totalSteps={PARTNER_TOTAL_STEPS}
-            />
-          </SafeAreaView>
-        );
-
-      case PartnerStep.Referral:
-        return (
-          <SafeAreaView style={styles.safe}>
-            <WizardReferralScreen
-              userId={user.id}
-              formData={formData}
-              onUpdate={updateFormData}
-              onSubmit={handlePartnerSubmit}
-              onBack={() => setStep(PartnerStep.DrivingLicence)}
-              currentStep={dotOffset + PartnerStep.Referral}
-              totalSteps={PARTNER_TOTAL_STEPS}
-            />
-          </SafeAreaView>
-        );
-
-      default:
-        return (
-          <SafeAreaView style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={theme.colors.primary} />
-          </SafeAreaView>
-        );
-    }
+    return (
+      <OnboardingScreen
+        formData={formData}
+        onUpdate={updateFormData}
+        onSubmitCustomer={handleCustomerFinish}
+        onSubmitPartner={handlePartnerSubmit}
+        onExit={confirmDiscardAndSignOut}
+      />
+    );
   }
 
   // ───── Logged in + profile complete — main app ────────────────────────────
@@ -597,25 +588,17 @@ export const AppNavigator: React.FC = () => {
       case 'home':
         return isCustomer
           ? <CustomerMapScreen />
-          : <DashboardScreen
-              locationError={locationError}
-              onNavigateToReferrals={() => {}}
-              onNavigateToProfile={() => setActiveTab('profile')}
-            />;
+          : <DashboardScreen locationError={locationError} />;
       case 'tab2':
         return isCustomer
-          ? <ComingSoonScreen iconName="hardware-chip-outline" />
-          : <ComingSoonScreen iconName="list-outline" />;
+          ? <AiAgentScreen />
+          : <ComingSoonScreen icon={IconList} />;
       case 'profile':
         return <ProfileScreen />;
       default:
         return isCustomer
           ? <CustomerMapScreen />
-          : <DashboardScreen
-              locationError={locationError}
-              onNavigateToReferrals={() => {}}
-              onNavigateToProfile={() => setActiveTab('profile')}
-            />;
+          : <DashboardScreen locationError={locationError} />;
     }
   };
 
@@ -624,13 +607,11 @@ export const AppNavigator: React.FC = () => {
       <View style={styles.tabContent}>{renderTabContent()}</View>
       <View style={styles.tabBar}>
         <TouchableOpacity style={styles.tabItem} onPress={() => setActiveTab('home')} activeOpacity={0.8}>
-          <Ionicons
-            name={isCustomer
-              ? (activeTab === 'home' ? 'map' : 'map-outline')
-              : (activeTab === 'home' ? 'home' : 'home-outline')}
-            size={24}
-            color={activeTab === 'home' ? theme.colors.primary : theme.colors.mutedText}
-          />
+          {isCustomer ? (
+            <IconMapTrifold size={24} color={activeTab === 'home' ? theme.colors.primary : theme.colors.mutedText} />
+          ) : (
+            <IconHouse size={24} color={activeTab === 'home' ? theme.colors.primary : theme.colors.mutedText} />
+          )}
           <Text
             variant="caption"
             color={activeTab === 'home' ? theme.colors.primary : theme.colors.mutedText}
@@ -641,13 +622,11 @@ export const AppNavigator: React.FC = () => {
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.tabItem} onPress={() => setActiveTab('tab2')} activeOpacity={0.8}>
-          <Ionicons
-            name={isCustomer
-              ? (activeTab === 'tab2' ? 'hardware-chip' : 'hardware-chip-outline')
-              : (activeTab === 'tab2' ? 'list' : 'list-outline')}
-            size={24}
-            color={activeTab === 'tab2' ? theme.colors.primary : theme.colors.mutedText}
-          />
+          {isCustomer ? (
+            <IconCpu size={24} color={activeTab === 'tab2' ? theme.colors.primary : theme.colors.mutedText} />
+          ) : (
+            <IconList size={24} color={activeTab === 'tab2' ? theme.colors.primary : theme.colors.mutedText} />
+          )}
           <Text
             variant="caption"
             color={activeTab === 'tab2' ? theme.colors.primary : theme.colors.mutedText}
@@ -660,11 +639,7 @@ export const AppNavigator: React.FC = () => {
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.tabItem} onPress={() => setActiveTab('profile')} activeOpacity={0.8}>
-          <Ionicons
-            name={activeTab === 'profile' ? 'person' : 'person-outline'}
-            size={24}
-            color={activeTab === 'profile' ? theme.colors.primary : theme.colors.mutedText}
-          />
+          <IconUser size={24} color={activeTab === 'profile' ? theme.colors.primary : theme.colors.mutedText} />
           <Text
             variant="caption"
             color={activeTab === 'profile' ? theme.colors.primary : theme.colors.mutedText}
@@ -679,10 +654,6 @@ export const AppNavigator: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -707,11 +678,6 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
     paddingBottom: Platform.OS === 'ios' ? 16 : 8,
     paddingTop: 8,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 8,
   },
   tabItem: {
     flex: 1,
@@ -719,8 +685,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   tabLabel: {
+    fontFamily: theme.fonts.medium,
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '500',
     marginTop: 4,
   },
 });

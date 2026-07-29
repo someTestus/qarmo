@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   View,
@@ -7,25 +7,21 @@ import {
   TouchableOpacity,
   Image,
   Share,
-  Platform,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { theme, Text, Card, getInitials } from '@qarmo/ui';
+import * as Clipboard from 'expo-clipboard';
+import { theme, Text, Card, getInitials, IconTaxi, IconScooter, IconStar, IconShareNetwork } from '@qarmo/ui';
 import { useTranslation } from '@qarmo/i18n';
 import { supabase } from '@qarmo/supabase';
 import { useAuth } from '../hooks/useAuth';
-import * as Location from 'expo-location';
 import { GlobalCounter } from '../components/GlobalCounter';
 
 interface Props {
-  onNavigateToReferrals: () => void;
-  onNavigateToProfile: () => void;
   locationError?: boolean;
 }
 
 export const DashboardScreen: React.FC<Props> = ({
-  onNavigateToReferrals,
-  onNavigateToProfile,
   locationError = false,
 }) => {
   const { t } = useTranslation();
@@ -35,9 +31,10 @@ export const DashboardScreen: React.FC<Props> = ({
 
   const referralCode = profile?.referral_code || '';
   const firstName = profile?.full_name?.split(' ')[0] || 'Partner';
-  const partnerTypeLabel = profile?.partner_type === 'ride' 
-    ? t('partner.ridePartner', { defaultValue: '🛺 Ride Partner' }) 
-    : t('partner.deliveryPartner', { defaultValue: '🛵 Delivery Partner' });
+  const partnerTypeLabel = profile?.partner_type === 'ride'
+    ? t('partner.ridePartner', { defaultValue: 'Ride Partner' })
+    : t('partner.deliveryPartner', { defaultValue: 'Delivery Partner' });
+  const PartnerTypeIcon = profile?.partner_type === 'ride' ? IconTaxi : IconScooter;
 
   useEffect(() => {
     if (!profile) return;
@@ -58,26 +55,23 @@ export const DashboardScreen: React.FC<Props> = ({
     fetchReferrals();
   }, [profile]);
 
+  const [plateNumber, setPlateNumber] = useState<string>('');
+
   const handleShare = async () => {
-    if (!referralCode) return;
+    if (!referralCode) {
+      Alert.alert(t('dashboard.codeNotReady', { defaultValue: 'Your referral code is still being generated. Please try again in a moment.' }));
+      return;
+    }
+    const message = t('dashboard.shareMessage', { code: referralCode, defaultValue: `Join Qarmo with my code ${referralCode}` });
     try {
-      await Share.share({
-        message: t('dashboard.shareMessage', { code: referralCode, defaultValue: `Join Qarmo with my code ${referralCode}` }),
-      });
+      const result = await Share.share({ message });
+      if (result.action === Share.dismissedAction) return;
     } catch (err) {
-      console.error('Error sharing code:', err);
+      console.error('Error sharing code, falling back to clipboard:', err);
+      await Clipboard.setStringAsync(referralCode);
+      Alert.alert(t('dashboard.codeCopied', { defaultValue: 'Code copied' }));
     }
   };
-
-  if (!profile) {
-    return (
-      <SafeAreaView style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-      </SafeAreaView>
-    );
-  }
-
-  const [plateNumber, setPlateNumber] = useState<string>('');
 
   useEffect(() => {
     if (!profile) return;
@@ -92,13 +86,21 @@ export const DashboardScreen: React.FC<Props> = ({
         .eq('owner_id', profile.id)
         .limit(1)
         .maybeSingle();
-      
+
       if (data?.registration_number) {
         setPlateNumber(data.registration_number);
       }
     };
     fetchVehicle();
   }, [profile]);
+
+  if (!profile) {
+    return (
+      <SafeAreaView style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -126,7 +128,10 @@ export const DashboardScreen: React.FC<Props> = ({
             </View>
             <View style={styles.idDetails}>
               <Text variant="title" style={styles.idName}>{profile.full_name || firstName}</Text>
-              <Text variant="body" color={theme.colors.mutedText}>{partnerTypeLabel}</Text>
+              <View style={styles.partnerTypeRow}>
+                <PartnerTypeIcon size={16} color={theme.colors.mutedText} />
+                <Text variant="body" color={theme.colors.mutedText}>{partnerTypeLabel}</Text>
+              </View>
               <Text variant="caption" color={theme.colors.mutedText}>
                 {profile.city || t('dashboard.unknownCity', { defaultValue: 'Unknown City' })} {plateNumber ? `· ${plateNumber}` : ''}
               </Text>
@@ -134,9 +139,12 @@ export const DashboardScreen: React.FC<Props> = ({
           </View>
 
           <View style={styles.idStats}>
-            <Text variant="heroNumber" style={styles.pointsText}>
-              ⭐ {points} points
-            </Text>
+            <View style={styles.pointsRow}>
+              <IconStar size={28} color="#1B7A3D" />
+              <Text variant="heroNumber" style={styles.pointsText}>
+                {points} points
+              </Text>
+            </View>
             <Text variant="body" color={theme.colors.mutedText} style={styles.referredText}>
               {referredCount === 0
                 ? t('dashboard.inviteNudge', { defaultValue: 'Invite a friend to earn points!' })
@@ -151,8 +159,9 @@ export const DashboardScreen: React.FC<Props> = ({
         </Card>
 
         <TouchableOpacity style={styles.shareBtn} onPress={handleShare} activeOpacity={0.8}>
+          <IconShareNetwork size={18} color={theme.colors.ink} />
           <Text variant="body" style={styles.shareBtnText}>
-            🔗 {t('dashboard.shareCode', { defaultValue: 'Share my code' })}
+            {t('dashboard.shareCode', { defaultValue: 'Share my code' })}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -214,8 +223,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surface,
   },
   placeholderText: {
+    fontFamily: theme.fonts.medium,
     fontSize: 24,
-    fontWeight: 'bold',
+    fontWeight: '500',
     color: theme.colors.mutedText,
   },
   idDetails: {
@@ -224,24 +234,39 @@ const styles = StyleSheet.create({
   idName: {
     marginBottom: 4,
   },
+  partnerTypeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   idStats: {
     gap: theme.spacing.sm,
   },
+  pointsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing.xs,
+  },
   pointsText: {
     color: '#1B7A3D', // Kerala Green
+    fontFamily: theme.fonts.medium,
     fontSize: 40,
-    fontWeight: '800',
+    fontWeight: '500',
   },
   referredText: {
+    fontFamily: theme.fonts.medium,
     fontSize: 16,
     fontWeight: '500',
   },
   codeText: {
+    fontFamily: theme.fonts.medium,
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '500',
     marginTop: theme.spacing.xs,
   },
   shareBtn: {
+    flexDirection: 'row',
+    gap: theme.spacing.xs,
     backgroundColor: '#FFC107', // Amber element
     paddingVertical: theme.spacing.md,
     borderRadius: theme.radius.md,
@@ -251,7 +276,8 @@ const styles = StyleSheet.create({
   },
   shareBtnText: {
     color: theme.colors.ink,
-    fontWeight: '700',
+    fontFamily: theme.fonts.medium,
+    fontWeight: '500',
     fontSize: 16,
   },
 });

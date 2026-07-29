@@ -1,4 +1,38 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(npm -v)",
+      "Bash(npx expo *)",
+      "Bash(pnpm -v)",
+      "Bash(pnpm install *)",
+      "Bash(adb devices *)",
+      "Bash(pnpm start *)",
+      "Bash(ipconfig getifaddr *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" \"http://localhost:8081/status\")",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" \"http://localhost:8081/status\")",
+      "Bash(lsof -nP -iTCP:8081 -sTCP:LISTEN)",
+      "Bash(awk '/^[a-z]/{iface=$1} /inet /{print iface\" \"$2}')",
+      "Bash(route -n get default)",
+      "Bash(/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate)",
+      "Bash(curl -s -m 5 \"http://192.168.1.12:8081/status\")",
+      "Bash(pkill -f \"expo start\")",
+      "Bash(git remote *)",
+      "Bash(pnpm --filter partner exec tsc --noEmit)",
+      "Bash(pnpm exec *)",
+      "Bash(node -e \"console.log\\(require.resolve\\('expo-file-system/legacy', {paths:[require\\('path'\\).resolve\\('apps/partner'\\)]}\\)\\)\")",
+      "Bash(node -e ' *)",
+      "Bash(git show *)",
+      "Read(//tmp/**)",
+      "Bash(cp /tmp/orig-metro.config.js /tmp/metro.config.js.bak)",
+      "Bash(supabase projects *)",
+      "Bash(supabase link *)",
+      "Bash(supabase migration *)",
+      "Bash(supabase db *)",
+      "Bash(supabase --help)",
+      "Bash(supabase functions *)",
+      "Bash(supabase secrets *)"
+    ]
+  },
   "enabledPlugins": {
     "expo@claude-plugins-official": true
   }

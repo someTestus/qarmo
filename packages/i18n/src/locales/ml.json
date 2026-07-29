@@ -31,22 +31,18 @@
     "rides": "യാത്രകൾ",
     "earnings": "വരുമാനം",
     "referrals": "റഫറലുകൾ",
-    "ridePartner": "🛺 റൈഡ് പാർട്ണർ",
-    "deliveryPartner": "🛵 ഡെലിവറി പാർട്ണർ"
+    "ridePartner": "റൈഡ് പാർട്ണർ",
+    "deliveryPartner": "ഡെലിവറി പാർട്ണർ"
   },
   "accountType": {
     "title": "ഖർമോ എങ്ങനെ ഉപയോഗിക്കും?",
     "customer": "കസ്റ്റമർ",
-    "partner": "പാർട്ണർ",
-    "customerIcon": "🧍",
-    "partnerIcon": "🛺"
+    "partner": "പാർട്ണർ"
   },
   "partnerType": {
     "title": "നിങ്ങൾ എന്ത് ചെയ്യുന്നു?",
     "delivery": "ഡെലിവറി പാർട്ണർ",
-    "ride": "റൈഡ് പാർട്ണർ",
-    "deliveryIcon": "🛵",
-    "rideIcon": "🛺"
+    "ride": "റൈഡ് പാർട്ണർ"
   },
   "wizard": {
     "nameAndPhoto": "നിങ്ങളുടെ വിവരങ്ങൾ",
@@ -93,6 +89,7 @@
     "uploadDocument": "രേഖ അപ്‌ലോഡ് ചെയ്യുക",
     "uploadFailed": "അപ്‌ലോഡ് പരാജയപ്പെട്ടു.",
     "tryAgain": "വീണ്ടും ശ്രമിക്കുക",
+    "chooseAccountType": "തുടരാൻ കസ്റ്റമർ അല്ലെങ്കിൽ പാർട്ണർ തിരഞ്ഞെടുക്കുക",
     "addPhotoToContinue": "തുടരാൻ ഒരു ഫോട്ടോ ചേർക്കുക",
     "addDocumentToContinue": "തുടരാൻ ഒരു രേഖ ചേർക്കുക",
     "enterNameToContinue": "തുടരാൻ നിങ്ങളുടെ പേര് നൽകുക",
@@ -161,7 +158,9 @@
     "friendJoinedSingular": "1 സുഹൃത്ത് ജോയിൻ ചെയ്തു",
     "friendsJoinedPlural": "{{count}} സുഹൃത്തുക്കൾ ജോയിൻ ചെയ്തു",
     "unknownCity": "അജ്ഞാത നഗരം",
-    "shareMessage": "എന്റെ കോഡ് {{code}} ഉപയോഗിച്ച് ഖർമോയിൽ ചേരൂ"
+    "shareMessage": "എന്റെ കോഡ് {{code}} ഉപയോഗിച്ച് ഖർമോയിൽ ചേരൂ",
+    "codeCopied": "കോഡ് പകർത്തി",
+    "codeNotReady": "നിങ്ങളുടെ റഫറൽ കോഡ് ഇപ്പോഴും തയ്യാറാക്കുന്നു. അൽപ്പസമയത്തിനുശേഷം വീണ്ടും ശ്രമിക്കുക."
   },
   "profile": {
     "memberSince": "അംഗമായ തീയതി: {{date}}",
